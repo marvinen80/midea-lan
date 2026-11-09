@@ -33,6 +33,7 @@ from .message import (
     PowerQuery,
     PropertiesCapsQuery,
     PropertiesCapsQuery1,
+    PropertiesSmartEyeQuery,
     PropertiesDefaultQuery,
     PropertiesSet,
     StateQuery,
@@ -57,6 +58,7 @@ ACQuery = (
     | PropertiesDefaultQuery
     | PropertiesCapsQuery
     | PropertiesCapsQuery1
+    | PropertiesSmartEyeQuery
     | PowerQuery
     | HumidityQuery
     | GroupZeroQuery
@@ -428,6 +430,9 @@ class MideaACDevice(MideaDevice):
         self._timers_in_new_protocol = False
         # Current iECO gear the device reports; echoed back when setting iECO.
         self._ieco_number: int = 1
+        # Q13_SMART_EYE_0030_READ_PATCH_V2
+        self._smart_eye_new_protocol: bool = False
+        self._smart_eye_settings: bytes | None = None
         self._default_temperature_step: float = 0.5
         self._temperature_step: float = 0.5
         self._used_subprotocol: bool = self._model_capabilities.uses_bb_protocol
@@ -559,6 +564,8 @@ class MideaACDevice(MideaDevice):
             StateQuery(self._message_protocol_version),
             default_query,
         ]
+        if self.capabilities.get("nobody_energy_save"):
+            queries.append(PropertiesSmartEyeQuery(self._message_protocol_version))
         _LOGGER.debug(
             "[%s] PropertiesDefaultQuery: %d properties [%s]",
             self._device_id,
@@ -787,6 +794,9 @@ class MideaACDevice(MideaDevice):
         new_status = {}
         has_fresh_air = False
         body_type = getattr(message, "body_type", None)
+        if hasattr(message, "nobody_energy_save"):
+            self._smart_eye_new_protocol = True
+            self._smart_eye_settings = bytes(message.nobody_energy_save)
 
         if getattr(message, "has_new_protocol_temperature", False):
             self._prefer_new_protocol_temperature = True
@@ -858,6 +868,12 @@ class MideaACDevice(MideaDevice):
                 if (
                     is_stale_a0_screen_display
                     and attr == DeviceAttributes.screen_display
+                ):
+                    continue
+                if (
+                    self._smart_eye_new_protocol
+                    and body_type == ListTypes.A0
+                    and attr == DeviceAttributes.smart_eye
                 ):
                     continue
                 if is_stale_c0_timer and attr in TIMER_ATTRIBUTES:
@@ -1300,7 +1316,11 @@ class MideaACDevice(MideaDevice):
         message.swing_horizontal = self._attributes[DeviceAttributes.swing_horizontal]
         message.boost_mode = self._attributes[DeviceAttributes.boost_mode]
         message.power_saving = self._attributes[DeviceAttributes.power_saving]
-        message.smart_eye = self._attributes[DeviceAttributes.smart_eye]
+        message.smart_eye = (
+            False
+            if self._smart_eye_new_protocol
+            else self._attributes[DeviceAttributes.smart_eye]
+        )
         message.dry = self._attributes[DeviceAttributes.dry]
         message.eco_mode = self._attributes[DeviceAttributes.eco_mode]
         message.aux_heating = self._attributes[DeviceAttributes.aux_heating]
@@ -1332,6 +1352,19 @@ class MideaACDevice(MideaDevice):
     ) -> PropertiesSet:
         """Midea AC device make newprotocol message set."""
         message = PropertiesSet(self._message_protocol_version)
+
+        # Q13_SMART_EYE_0030_WRITE_PATCH_V4
+        if (
+            attr == DeviceAttributes.smart_eye
+            and self._smart_eye_new_protocol
+            and self._smart_eye_settings is not None
+        ):
+            settings = bytearray(self._smart_eye_settings)
+            # Change ONLY the Q13 Smart Eye on/off byte.
+            settings[0] = 0x01 if bool(value) else 0x00
+            message.nobody_energy_save = bytes(settings)
+            message.prompt_tone = self._attributes[DeviceAttributes.prompt_tone]
+            return message
 
         # wind_lr_angle
         if attr == DeviceAttributes.wind_lr_angle:
@@ -1788,6 +1821,12 @@ class MideaACDevice(MideaDevice):
                 DeviceAttributes.fresh_air_exhaust_mode,
             }:
                 message = self.make_subprotocol_fresh_air_set(attr, value)
+            elif (
+                attr == DeviceAttributes.smart_eye
+                and self._smart_eye_new_protocol
+                and self._smart_eye_settings is not None
+            ):
+                message = self.make_newprotocol_message_set(attr=attr, value=value)
             elif attr in [
                 DeviceAttributes.indirect_wind,
                 DeviceAttributes.wind_straight,

@@ -1022,6 +1022,17 @@ class PropertiesCapsQuery1(_PropertiesCapsQueryBase):
     """Second dynamic capability properties query batch."""
 
 
+# Q13_SMART_EYE_0030_READ_PATCH_V2
+class PropertiesSmartEyeQuery(_PropertiesCapsQueryBase):
+    """Dedicated Q13 Smart Eye / nobody_energy_save B1 query."""
+
+    def __init__(self, protocol_version: int) -> None:
+        super().__init__(
+            protocol_version,
+            properties_subset=[int(CapabilityTag.nobody_energy_save)],
+        )
+
+
 class MessageSubProtocol(MessageACBase):
     """AC message sub protocol."""
 
@@ -1401,6 +1412,9 @@ class PropertiesSet(MessageACBase):
         self.light_sensitive: bool | None = None
         self.ieco: bool | None = None
         self.ieco_number: int = 1
+        # Q13_SMART_EYE_0030_WRITE_PATCH_V4
+        # Q13 Smart Eye / nobody_energy_save 0x0030, complete vendor payload.
+        self.nobody_energy_save: bytes | None = None
         # Countdown timers in minutes (0 = disarm).
         self.power_on_timer: int | None = None
         self.power_off_timer: int | None = None
@@ -1520,6 +1534,14 @@ class PropertiesSet(MessageACBase):
                             else OUT_SILENT_OFF_VALUE,
                         ],
                     ),
+                ),
+            )
+        if self.nobody_energy_save is not None:
+            pack_count += 1
+            payload.extend(
+                NewProtocolMessageBody.pack(
+                    param=CapabilityTag.nobody_energy_save,
+                    value=bytearray(self.nobody_energy_save),
                 ),
             )
         if self.sound is not None:
@@ -1762,6 +1784,14 @@ class PropertiesBody(NewProtocolMessageBody):
             )
         if CapabilityTag.wind_avoid in params and self.body_type != ListTypes.B5:
             self.wind_avoid = params[CapabilityTag.wind_avoid][0] > 0
+        if (
+            CapabilityTag.nobody_energy_save in params
+            and self.body_type != ListTypes.B5
+        ):
+            smart_eye_data = params[CapabilityTag.nobody_energy_save]
+            if smart_eye_data:
+                self.smart_eye = smart_eye_data[0] > 0
+                self.nobody_energy_save = bytes(smart_eye_data)
         if CapabilityTag.degerming in params and self.body_type != ListTypes.B5:
             # Queried degerming state (0x00 off / 0x01 on).
             self.degerming_active = params[CapabilityTag.degerming][0] > 0
